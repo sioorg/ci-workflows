@@ -31,21 +31,21 @@ on:
 
 jobs:
   test:
-    uses: siopinto/ci-workflows/.github/workflows/python-test.yml@v1
+    uses: sioorg/ci-workflows/.github/workflows/python-test.yml@v1
     with:
       pytest-args: '-m "not integration"'
 
   deploy:
     needs: test
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    uses: siopinto/ci-workflows/.github/workflows/docker-deploy.yml@v1
+    uses: sioorg/ci-workflows/.github/workflows/docker-deploy.yml@v1
     with:
       deploy-dir: /home/mysio/my-project
       health-url: http://127.0.0.1:8000/health
 
   eval:
     if: github.event_name == 'schedule'
-    uses: siopinto/ci-workflows/.github/workflows/agent-eval.yml@v1
+    uses: sioorg/ci-workflows/.github/workflows/agent-eval.yml@v1
     secrets: inherit
 ```
 
@@ -110,7 +110,7 @@ Pass credentials with `secrets: inherit`.
 Poll a URL until it succeeds. Useful inside a job you write yourself.
 
 ```yaml
-- uses: siopinto/ci-workflows/actions/health-check@v1
+- uses: sioorg/ci-workflows/actions/health-check@v1
   with:
     url: http://127.0.0.1:8000/health
     timeout: "60"
@@ -154,7 +154,7 @@ Several apps can share one host, each in its own folder under
 Consumers should pin a tag, never `@main`:
 
 ```yaml
-uses: siopinto/ci-workflows/.github/workflows/python-test.yml@v1
+uses: sioorg/ci-workflows/.github/workflows/python-test.yml@v1
 ```
 
 If every project tracked `@main`, one bad commit here would break every
