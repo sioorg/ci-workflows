@@ -116,6 +116,39 @@ Poll a URL until it succeeds. Useful inside a job you write yourself.
     timeout: "60"
 ```
 
+## Adding a new app
+
+Several apps can share one host, each in its own folder under
+`/home/mysio/my-apps/`. Per app:
+
+1. **Clone** the repo to `/home/mysio/my-apps/<app>` and create its `.env`
+   there. The deploy's `git reset --hard` leaves untracked files like `.env`
+   alone, but it discards any uncommitted change to tracked files.
+2. **Pick a free host port.** Only one container can publish `127.0.0.1:8000`.
+   Publish the next app on another port in its compose file (for example
+   `127.0.0.1:8001:8000`) and pass the same port in `health-url`.
+3. **Join the shared `edge` network** with a unique `container_name`, so
+   cloudflared can reach it by name.
+4. **Add `.github/workflows/ci-cd.yml`** calling these workflows at `@v1`, with
+   `deploy-dir: /home/mysio/my-apps/<app>` and its own `health-url`.
+5. **Register a runner for that repo.** Runners are per repository on a
+   personal account (only organizations get shared ones). Give each its own
+   folder and name so the systemd services don't clash:
+
+   ```bash
+   mkdir -p ~/actions-runners/<app> && cd ~/actions-runners/<app>
+   # download + extract as shown on the repo's Settings -> Actions -> Runners -> New page
+   ./config.sh --url https://github.com/siopinto/<app> --token <TOKEN> --name ubuntu-<app>
+   sudo ./svc.sh install mysio && sudo ./svc.sh start
+   ```
+
+   Keep the default `self-hosted,Linux` labels; `docker-deploy.yml` expects them.
+6. **Add a public hostname** to the Cloudflare tunnel pointing at
+   `http://<container_name>:<container port>`.
+7. **Set repo secrets** only for what the nightly eval reads (for example
+   `GROQ_API_KEY`, `TAVILY_API_KEY`). Production keys stay in the host's `.env`
+   and are never copied to GitHub.
+
 ## Versioning
 
 Consumers should pin a tag, never `@main`:
