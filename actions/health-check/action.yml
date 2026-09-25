@@ -1,0 +1,38 @@
+name: Health check
+description: Poll a URL until it returns success, or fail after a timeout.
+
+inputs:
+  url:
+    description: URL to poll.
+    required: true
+  timeout:
+    description: Seconds to keep trying.
+    required: false
+    default: "30"
+  interval:
+    description: Seconds between attempts.
+    required: false
+    default: "1"
+
+outputs:
+  body:
+    description: Response body from the first successful request.
+    value: ${{ steps.poll.outputs.body }}
+
+runs:
+  using: composite
+  steps:
+    - id: poll
+      shell: bash
+      run: |
+        deadline=$(( SECONDS + ${{ inputs.timeout }} ))
+        while [ $SECONDS -lt $deadline ]; do
+          if body=$(curl -fsS "${{ inputs.url }}" 2>/dev/null); then
+            echo "healthy after $SECONDS s"
+            echo "body=$body" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          sleep ${{ inputs.interval }}
+        done
+        echo "::error::${{ inputs.url }} did not become healthy within ${{ inputs.timeout }}s"
+        exit 1

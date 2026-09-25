@@ -1,0 +1,108 @@
+name: Agent evaluation
+
+# Layers 3 and 4: tests that call real models.
+#
+# These cost money and are non-deterministic, so they must not gate every
+# push. Run them on a schedule, before a release, or manually. A failure here
+# means "a human should look", not "the build is broken".
+#
+# Two independent mechanisms, both optional:
+#   - pytest tests carrying a marker (default: integration)
+#   - a promptfoo config for golden-dataset / LLM-as-judge evals
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        type: string
+        default: "3.12"
+      requirements-file:
+        type: string
+        default: requirements.lock.txt
+      dev-requirements-file:
+        type: string
+        default: requirements-dev.txt
+      pytest-marker:
+        description: Marker selecting the real-API tests. Empty to skip.
+        type: string
+        default: integration
+      promptfoo-config:
+        description: Path to promptfooconfig.yaml. Empty to skip.
+        type: string
+        default: ""
+      working-directory:
+        type: string
+        default: "."
+      fail-on-eval-regression:
+        description: If false, a failing eval is reported but does not fail the run.
+        type: boolean
+        default: true
+    secrets:
+      # Passed through to the tests. Declare only what the project needs;
+      # callers typically use `secrets: inherit`.
+      GROQ_API_KEY:
+        required: false
+      ANTHROPIC_API_KEY:
+        required: false
+      TAVILY_API_KEY:
+        required: false
+      OPENAI_API_KEY:
+        required: false
+      LANGSMITH_API_KEY:
+        required: false
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+
+    env:
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+      # Traces land in LangSmith when a key is present, giving you the full
+      # tool-call history for any eval that regressed.
+      LANGSMITH_TRACING: ${{ secrets.LANGSMITH_API_KEY != '' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          [ -f "${{ inputs.requirements-file }}" ] && pip install -r "${{ inputs.requirements-file }}"
+          [ -f "${{ inputs.dev-requirements-file }}" ] && pip install -r "${{ inputs.dev-requirements-file }}"
+          true
+
+      - name: Real-API tests
+        if: inputs.pytest-marker != ''
+        continue-on-error: ${{ !inputs.fail-on-eval-regression }}
+        run: pytest -m "${{ inputs.pytest-marker }}" -v
+
+      - name: Set up Node for promptfoo
+        if: inputs.promptfoo-config != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run promptfoo eval
+        if: inputs.promptfoo-config != ''
+        continue-on-error: ${{ !inputs.fail-on-eval-regression }}
+        run: npx --yes promptfoo@latest eval -c "${{ inputs.promptfoo-config }}" --output eval-results.json
+
+      - name: Upload eval results
+        if: always() && inputs.promptfoo-config != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: ${{ inputs.working-directory }}/eval-results.json
+          if-no-files-found: ignore

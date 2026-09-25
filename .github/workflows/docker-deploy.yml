@@ -1,0 +1,100 @@
+name: Docker deploy
+
+# Deploys to a self-hosted runner. Built for machines behind NAT: the runner
+# polls GitHub outbound, so the host needs no inbound ports and no SSH.
+#
+# The image is built on the target rather than pulled from a registry. At
+# small scale that avoids registry auth and architecture mismatches entirely.
+
+on:
+  workflow_call:
+    inputs:
+      deploy-dir:
+        description: Absolute path to the checkout on the runner host.
+        type: string
+        required: true
+      health-url:
+        type: string
+        default: http://127.0.0.1:8000/health
+      health-timeout:
+        description: Seconds to wait for the service to report healthy.
+        type: number
+        default: 30
+      compose-file:
+        type: string
+        default: docker-compose.yml
+      runner-labels:
+        description: JSON array of runner labels, e.g. '["self-hosted","Linux"]'
+        type: string
+        default: '["self-hosted","Linux"]'
+      prune-images:
+        type: boolean
+        default: true
+      smoke-command:
+        description: Optional shell command run after the health gate. Non-zero fails the deploy.
+        type: string
+        default: ""
+
+jobs:
+  deploy:
+    runs-on: ${{ fromJSON(inputs.runner-labels) }}
+
+    # Two deploys must never interleave on one machine.
+    concurrency:
+      group: deploy-${{ github.repository }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Record current revision
+        id: before
+        run: |
+          cd "${{ inputs.deploy-dir }}"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Pull latest code
+        run: |
+          cd "${{ inputs.deploy-dir }}"
+          git fetch --prune origin "${GITHUB_REF_NAME}"
+          # Hard reset rather than merge: the host must match the repo exactly,
+          # and a half-merged deploy is worse than a failed one.
+          # NOTE: this discards uncommitted changes in the deploy directory.
+          git reset --hard "origin/${GITHUB_REF_NAME}"
+          echo "now at $(git rev-parse --short HEAD)"
+
+      - name: Rebuild and restart
+        run: |
+          cd "${{ inputs.deploy-dir }}"
+          docker compose -f "${{ inputs.compose-file }}" up -d --build
+
+      - name: Wait for healthy
+        id: health
+        run: |
+          for i in $(seq 1 ${{ inputs.health-timeout }}); do
+            if curl -fsS "${{ inputs.health-url }}" > /dev/null 2>&1; then
+              echo "healthy after ${i}s"
+              curl -s "${{ inputs.health-url }}"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::not healthy within ${{ inputs.health-timeout }}s"
+          exit 1
+
+      - name: Smoke test
+        if: inputs.smoke-command != ''
+        run: |
+          cd "${{ inputs.deploy-dir }}"
+          ${{ inputs.smoke-command }}
+
+      - name: Roll back
+        if: failure() && steps.before.outputs.sha != ''
+        run: |
+          cd "${{ inputs.deploy-dir }}"
+          echo "::warning::deploy failed, rolling back to ${{ steps.before.outputs.sha }}"
+          git reset --hard "${{ steps.before.outputs.sha }}"
+          docker compose -f "${{ inputs.compose-file }}" up -d --build
+          docker compose -f "${{ inputs.compose-file }}" logs --tail 50
+
+      - name: Clean up old images
+        if: success() && inputs.prune-images
+        run: docker image prune -f

@@ -1,0 +1,77 @@
+name: Python tests
+
+# Layer 1 (mocked unit tests) and layer 2 (recorded/replayed HTTP).
+# Both are free and fast, so this runs on every push.
+#
+# Real-API tests belong behind a pytest marker and should be excluded here —
+# see pytest-args. Run them from agent-eval.yml on a schedule instead.
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        type: string
+        default: "3.12"
+      requirements-file:
+        description: Pinned runtime deps. Using the lock file means CI tests the versions production runs.
+        type: string
+        default: requirements.lock.txt
+      dev-requirements-file:
+        type: string
+        default: requirements-dev.txt
+      pytest-args:
+        description: 'Extra pytest args, e.g. -m "not integration"'
+        type: string
+        default: ""
+      working-directory:
+        type: string
+        default: "."
+      run-lint:
+        description: Run ruff check and format --check before the tests.
+        type: boolean
+        default: false
+      upload-coverage:
+        type: boolean
+        default: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          [ -f "${{ inputs.requirements-file }}" ] && pip install -r "${{ inputs.requirements-file }}"
+          [ -f "${{ inputs.dev-requirements-file }}" ] && pip install -r "${{ inputs.dev-requirements-file }}"
+          true
+
+      - name: Lint
+        if: inputs.run-lint
+        run: |
+          pip install ruff
+          ruff check .
+          ruff format --check .
+
+      - name: Test
+        # No secrets are passed in on purpose. If a test needs a real API key,
+        # it belongs in the eval workflow, not here.
+        run: pytest ${{ inputs.pytest-args }} --cov --cov-report=term-missing
+
+      - name: Upload coverage
+        if: inputs.upload-coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: ${{ inputs.working-directory }}/.coverage
+          if-no-files-found: ignore
