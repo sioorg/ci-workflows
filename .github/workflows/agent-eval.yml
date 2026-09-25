@@ -50,6 +50,9 @@ on:
         required: false
       LANGSMITH_API_KEY:
         required: false
+      SLACK_WEBHOOK_URL:
+        description: Slack incoming webhook. Optional; alerts on eval failure only.
+        required: false
 
 jobs:
   evaluate:
@@ -64,6 +67,7 @@ jobs:
       TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
       # Traces land in LangSmith when a key is present, giving you the full
       # tool-call history for any eval that regressed.
       LANGSMITH_TRACING: ${{ secrets.LANGSMITH_API_KEY != '' }}
@@ -106,3 +110,27 @@ jobs:
           name: eval-results
           path: ${{ inputs.working-directory }}/eval-results.json
           if-no-files-found: ignore
+
+      # Evals never gate a merge, so nobody is watching a red build. Ping
+      # Slack instead. Silent on success, and it can never fail the run.
+      - name: Alert Slack on failure
+        if: failure() && env.SLACK_WEBHOOK_URL != ''
+        continue-on-error: true
+        env:
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+
+          e = os.environ
+          name = e["REPO"].split("/")[-1]
+          text = f":warning: *{name}* nightly eval failed - <{e['RUN_URL']}|view run>"
+
+          request = urllib.request.Request(
+              e["SLACK_WEBHOOK_URL"],
+              json.dumps({"text": text}).encode(),
+              {"Content-Type": "application/json"},
+          )
+          urllib.request.urlopen(request, timeout=10).read()
+          PY

@@ -34,10 +34,17 @@ on:
         description: Optional shell command run after the health gate. Non-zero fails the deploy.
         type: string
         default: ""
+    secrets:
+      SLACK_WEBHOOK_URL:
+        description: Slack incoming webhook. Optional; no notification is sent when absent.
+        required: false
 
 jobs:
   deploy:
     runs-on: ${{ fromJSON(inputs.runner-labels) }}
+
+    env:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
     # Two deploys must never interleave on one machine.
     concurrency:
@@ -87,6 +94,7 @@ jobs:
           ${{ inputs.smoke-command }}
 
       - name: Roll back
+        id: rollback
         if: failure() && steps.before.outputs.sha != ''
         run: |
           cd "${{ inputs.deploy-dir }}"
@@ -98,3 +106,48 @@ jobs:
       - name: Clean up old images
         if: success() && inputs.prune-images
         run: docker image prune -f
+
+      # Last step, always runs. Skipped when no webhook is configured, and it
+      # can never fail the deploy: a Slack outage must not turn a good deploy red.
+      - name: Notify Slack
+        if: always() && env.SLACK_WEBHOOK_URL != ''
+        continue-on-error: true
+        env:
+          STATUS: ${{ job.status }}
+          ROLLED_BACK: ${{ steps.rollback.outcome == 'success' }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          ACTOR: ${{ github.actor }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # Build the JSON in Python so a commit message can never break or
+          # inject into the payload. python3 ships with Ubuntu; jq may not.
+          python3 - <<'PY'
+          import json, os, urllib.request
+
+          e = os.environ
+          name = e["REPO"].split("/")[-1]
+          short = e["SHA"][:7]
+          lines = (e.get("COMMIT_MSG") or "").splitlines()
+          subject = lines[0] if lines else ""
+          # Slack mrkdwn treats & < > specially.
+          subject = subject.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+          if e["STATUS"] == "success":
+              head = f":white_check_mark: *{name}* deployed `{short}`"
+          elif e["STATUS"] == "cancelled":
+              head = f":warning: *{name}* deploy of `{short}` was cancelled"
+          elif e["ROLLED_BACK"] == "true":
+              head = f":x: *{name}* deploy of `{short}` failed and was rolled back"
+          else:
+              head = f":x: *{name}* deploy of `{short}` failed"
+
+          detail = f"{subject} - by {e['ACTOR']} - <{e['RUN_URL']}|view run>"
+          body = json.dumps({"text": f"{head}\n{detail}"}).encode()
+
+          request = urllib.request.Request(
+              e["SLACK_WEBHOOK_URL"], body, {"Content-Type": "application/json"}
+          )
+          urllib.request.urlopen(request, timeout=10).read()
+          PY

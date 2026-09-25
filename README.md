@@ -103,6 +103,32 @@ tools were called and what they returned.
 
 Pass credentials with `secrets: inherit`.
 
+## Slack notifications
+
+`docker-deploy.yml` posts to Slack when it finishes (deployed, failed, rolled
+back, or cancelled), and `agent-eval.yml` posts when the nightly eval fails.
+Both are **optional and silent when no webhook is configured**, and a Slack
+outage can never fail a deploy.
+
+Setup, once for the whole org:
+
+1. In Slack, create an app with an **Incoming Webhook** for a channel such as
+   `#deploys` and copy the URL.
+2. Store it as an org secret, visible to every repo:
+
+   ```bash
+   gh secret set SLACK_WEBHOOK_URL --org sioorg --visibility all
+   ```
+3. In each project, pass secrets to the deploy job: `secrets: inherit`. (The
+   eval job already does.)
+
+Every message names the repo, so one channel stays readable. To give a project
+its own channel, set a **repo-level** `SLACK_WEBHOOK_URL` there; it overrides the
+org secret.
+
+The deploy step runs `python3` on the runner host (present on Ubuntu by
+default), not `jq`.
+
 ## Composite actions
 
 ### `actions/health-check`
@@ -145,9 +171,12 @@ Several apps can share one host, each in its own folder under
    Keep the default `self-hosted,Linux` labels; `docker-deploy.yml` expects them.
 6. **Add a public hostname** to the Cloudflare tunnel pointing at
    `http://<container_name>:<container port>`.
-7. **Set repo secrets** only for what the nightly eval reads (for example
-   `GROQ_API_KEY`, `TAVILY_API_KEY`). Production keys stay in the host's `.env`
-   and are never copied to GitHub.
+7. **Secrets.** With the org set up, the eval keys (`GROQ_API_KEY`,
+   `TAVILY_API_KEY`) and `SLACK_WEBHOOK_URL` are already inherited from the org.
+   Only add a repo-level secret if the project needs a different value.
+   Production keys stay in the host's `.env` and are never copied to GitHub.
+8. **Pass secrets to the deploy job** (`secrets: inherit`) so it can post to
+   Slack.
 
 ## Versioning
 
