@@ -103,28 +103,33 @@ tools were called and what they returned.
 
 Pass credentials with `secrets: inherit`.
 
-## Slack notifications
+## Telegram notifications
 
-`docker-deploy.yml` posts to Slack when it finishes (deployed, failed, rolled
-back, or cancelled), and `agent-eval.yml` posts when the nightly eval fails.
-Both are **optional and silent when no webhook is configured**, and a Slack
-outage can never fail a deploy.
+`docker-deploy.yml` messages Telegram when it finishes (deployed, failed,
+rolled back, or cancelled), and `agent-eval.yml` messages it when the nightly
+eval fails. Both are **optional and silent when no bot token is configured**,
+and a Telegram outage can never fail a deploy.
 
 Setup, once for the whole org:
 
-1. In Slack, create an app with an **Incoming Webhook** for a channel such as
-   `#deploys` and copy the URL.
-2. Store it as an org secret, visible to every repo:
+1. In Telegram, message **@BotFather**, send `/newbot`, and follow the
+   prompts. Copy the token it gives you.
+2. Start a chat with the new bot (or add it to a group) and send it any
+   message, then open
+   `https://api.telegram.org/bot<TOKEN>/getUpdates` and read the chat id out
+   of `"chat":{"id":...}`.
+3. Store both as org secrets, visible to every repo:
 
    ```bash
-   gh secret set SLACK_WEBHOOK_URL --org sioorg --visibility all
+   gh secret set TELEGRAM_BOT_TOKEN --org sioorg --visibility all
+   gh secret set TELEGRAM_CHAT_ID --org sioorg --visibility all
    ```
-3. In each project, pass secrets to the deploy job: `secrets: inherit`. (The
+4. In each project, pass secrets to the deploy job: `secrets: inherit`. (The
    eval job already does.)
 
-Every message names the repo, so one channel stays readable. To give a project
-its own channel, set a **repo-level** `SLACK_WEBHOOK_URL` there; it overrides the
-org secret.
+Every message names the repo, so one chat stays readable. To give a project
+its own chat, set repo-level `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` there;
+they override the org secrets.
 
 The deploy step runs `python3` on the runner host (present on Ubuntu by
 default), not `jq`.
@@ -172,11 +177,12 @@ Several apps can share one host, each in its own folder under
 6. **Add a public hostname** to the Cloudflare tunnel pointing at
    `http://<container_name>:<container port>`.
 7. **Secrets.** With the org set up, the eval keys (`GROQ_API_KEY`,
-   `TAVILY_API_KEY`) and `SLACK_WEBHOOK_URL` are already inherited from the org.
-   Only add a repo-level secret if the project needs a different value.
-   Production keys stay in the host's `.env` and are never copied to GitHub.
+   `TAVILY_API_KEY`) and `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` are already
+   inherited from the org. Only add a repo-level secret if the project needs a
+   different value. Production keys stay in the host's `.env` and are never
+   copied to GitHub.
 8. **Pass secrets to the deploy job** (`secrets: inherit`) so it can post to
-   Slack.
+   Telegram.
 
 ## Versioning
 
