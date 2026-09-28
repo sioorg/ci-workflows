@@ -50,8 +50,11 @@ on:
         required: false
       LANGSMITH_API_KEY:
         required: false
-      SLACK_WEBHOOK_URL:
-        description: Slack incoming webhook. Optional; alerts on eval failure only.
+      TELEGRAM_BOT_TOKEN:
+        description: Telegram bot token from @BotFather. Optional; alerts on eval failure only.
+        required: false
+      TELEGRAM_CHAT_ID:
+        description: Chat or group ID the bot should post to.
         required: false
 
 jobs:
@@ -67,7 +70,8 @@ jobs:
       TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
-      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       # Traces land in LangSmith when a key is present, giving you the full
       # tool-call history for any eval that regressed.
       LANGSMITH_TRACING: ${{ secrets.LANGSMITH_API_KEY != '' }}
@@ -112,25 +116,35 @@ jobs:
           if-no-files-found: ignore
 
       # Evals never gate a merge, so nobody is watching a red build. Ping
-      # Slack instead. Silent on success, and it can never fail the run.
-      - name: Alert Slack on failure
-        if: failure() && env.SLACK_WEBHOOK_URL != ''
+      # Telegram instead. Silent on success, and it can never fail the run.
+      - name: Alert Telegram on failure
+        if: failure() && env.TELEGRAM_BOT_TOKEN != ''
         continue-on-error: true
         env:
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python3 - <<'PY'
-          import json, os, urllib.request
+          import os, urllib.parse, urllib.request
 
           e = os.environ
           name = e["REPO"].split("/")[-1]
-          text = f":warning: *{name}* nightly eval failed - <{e['RUN_URL']}|view run>"
 
-          request = urllib.request.Request(
-              e["SLACK_WEBHOOK_URL"],
-              json.dumps({"text": text}).encode(),
-              {"Content-Type": "application/json"},
-          )
+          def esc(s):
+              for c in r"_*[]()~`>#+-=|{}.!":
+                  s = s.replace(c, "\\" + c)
+              return s
+
+          text = f"⚠️ *{esc(name)}* nightly eval failed \\- [view run]({e['RUN_URL']})"
+
+          body = urllib.parse.urlencode({
+              "chat_id": e["TELEGRAM_CHAT_ID"],
+              "text": text,
+              "parse_mode": "MarkdownV2",
+              "disable_web_page_preview": "true",
+          }).encode()
+
+          url = f"https://api.telegram.org/bot{e['TELEGRAM_BOT_TOKEN']}/sendMessage"
+          request = urllib.request.Request(url, body)
           urllib.request.urlopen(request, timeout=10).read()
           PY

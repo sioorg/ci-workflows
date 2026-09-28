@@ -35,8 +35,11 @@ on:
         type: string
         default: ""
     secrets:
-      SLACK_WEBHOOK_URL:
-        description: Slack incoming webhook. Optional; no notification is sent when absent.
+      TELEGRAM_BOT_TOKEN:
+        description: Telegram bot token from @BotFather. Optional; no notification is sent when absent.
+        required: false
+      TELEGRAM_CHAT_ID:
+        description: Chat or group ID the bot should post to.
         required: false
 
 jobs:
@@ -44,7 +47,8 @@ jobs:
     runs-on: ${{ fromJSON(inputs.runner-labels) }}
 
     env:
-      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
     # Two deploys must never interleave on one machine.
     concurrency:
@@ -107,10 +111,10 @@ jobs:
         if: success() && inputs.prune-images
         run: docker image prune -f
 
-      # Last step, always runs. Skipped when no webhook is configured, and it
-      # can never fail the deploy: a Slack outage must not turn a good deploy red.
-      - name: Notify Slack
-        if: always() && env.SLACK_WEBHOOK_URL != ''
+      # Last step, always runs. Skipped when no bot token is configured, and it
+      # can never fail the deploy: a Telegram outage must not turn a good deploy red.
+      - name: Notify Telegram
+        if: always() && env.TELEGRAM_BOT_TOKEN != ''
         continue-on-error: true
         env:
           STATUS: ${{ job.status }}
@@ -121,33 +125,42 @@ jobs:
           COMMIT_MSG: ${{ github.event.head_commit.message }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          # Build the JSON in Python so a commit message can never break or
-          # inject into the payload. python3 ships with Ubuntu; jq may not.
+          # Build the request in Python so a commit message can never break or
+          # inject into it. python3 ships with Ubuntu; jq may not.
           python3 - <<'PY'
-          import json, os, urllib.request
+          import json, os, urllib.parse, urllib.request
 
           e = os.environ
           name = e["REPO"].split("/")[-1]
           short = e["SHA"][:7]
           lines = (e.get("COMMIT_MSG") or "").splitlines()
           subject = lines[0] if lines else ""
-          # Slack mrkdwn treats & < > specially.
-          subject = subject.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+          # Telegram MarkdownV2 requires these characters to be escaped.
+          def esc(s):
+              for c in r"_*[]()~`>#+-=|{}.!":
+                  s = s.replace(c, "\\" + c)
+              return s
 
           if e["STATUS"] == "success":
-              head = f":white_check_mark: *{name}* deployed `{short}`"
+              head = f"✅ *{esc(name)}* deployed `{short}`"
           elif e["STATUS"] == "cancelled":
-              head = f":warning: *{name}* deploy of `{short}` was cancelled"
+              head = f"⚠️ *{esc(name)}* deploy of `{short}` was cancelled"
           elif e["ROLLED_BACK"] == "true":
-              head = f":x: *{name}* deploy of `{short}` failed and was rolled back"
+              head = f"❌ *{esc(name)}* deploy of `{short}` failed and was rolled back"
           else:
-              head = f":x: *{name}* deploy of `{short}` failed"
+              head = f"❌ *{esc(name)}* deploy of `{short}` failed"
 
-          detail = f"{subject} - by {e['ACTOR']} - <{e['RUN_URL']}|view run>"
-          body = json.dumps({"text": f"{head}\n{detail}"}).encode()
+          detail = f"{esc(subject)} \\- by {esc(e['ACTOR'])} \\- [view run]({e['RUN_URL']})"
+          text = f"{head}\n{detail}"
 
-          request = urllib.request.Request(
-              e["SLACK_WEBHOOK_URL"], body, {"Content-Type": "application/json"}
-          )
+          body = urllib.parse.urlencode({
+              "chat_id": e["TELEGRAM_CHAT_ID"],
+              "text": text,
+              "parse_mode": "MarkdownV2",
+              "disable_web_page_preview": "true",
+          }).encode()
+
+          url = f"https://api.telegram.org/bot{e['TELEGRAM_BOT_TOKEN']}/sendMessage"
+          request = urllib.request.Request(url, body)
           urllib.request.urlopen(request, timeout=10).read()
           PY
